@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DanPaulsFX Trading Bot</title>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial; background: #f4f4f4; padding: 20px; }
+    input, select, button { padding: 10px; margin: 5px 0; width: 100%; }
+    #log { background: #000; color: #0f0; height: 300px; overflow-y: auto; padding: 10px; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+<h2>🚀 DanPaulsFX Bot</h2>
+
+<label>API Token:</label>
+<input type="text" id="token" placeholder="Enter Deriv API Token" />
+
+<label>Select Asset:</label>
+<select id="asset">
+  <option value="R_10">R_10</option>
+  <option value="R_25">R_25</option>
+  <option value="R_50">R_50</option>
+  <option value="R_75">R_75</option>
+  <option value="R_100">R_100</option>
+  <option value="1HZ10V">Volatility 10 (1s)</option>
+  <option value="1HZ25V">Volatility 25 (1s)</option>
+  <option value="1HZ50V">Volatility 50 (1s)</option>
+  <option value="1HZ75V">Volatility 75 (1s)</option>
+  <option value="1HZ100V">Volatility 100 (1s)</option>
+</select>
+
+<label>Stake ($):</label>
+<input type="number" id="stake" step="0.01" placeholder="e.g. 0.35" />
+
+<button onclick="startBot()">▶️ Start Bot</button>
+
+<pre id="log">📋 Logs will appear here...</pre>
+
+<script>
+  let prices = [];
+  let rebuyLevels = [2, 4, 6];
+  let entryPrices = [];
+  let asset = "";
+  let stake = 0;
+  let token = "";
+  const BACKEND_URL = "https://danpaulsfx.onrender.com/ws-proxy";
+
+  function log(msg) {
+    const el = document.getElementById("log");
+    el.textContent += "\\n" + msg;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function sendToBackend(commands) {
+    const res = await fetch(BACKEND_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands }),
+    });
+    const data = await res.json();
+    return data.result || [];
+  }
+
+  async function requestProposal() {
+    log("📤 Requesting proposal...");
+    const commands = [
+      { authorize: token },
+      {
+        proposal: 1,
+        amount: stake,
+        basis: "stake",
+        contract_type: "CALL",
+        currency: "USD",
+        duration: 5,
+        duration_unit: "t",
+        symbol: asset
+      }
+    ];
+    const responses = await sendToBackend(commands);
+    const proposal = responses.find(r => r.proposal);
+    if (proposal) {
+      const buyCommand = {
+        buy: proposal.proposal.id,
+        price: stake
+      };
+      const buyResponse = await sendToBackend([buyCommand]);
+      const result = buyResponse.find(r => r.buy);
+      if (result) log("✅ Trade placed: " + result.buy.transaction_id);
+    } else {
+      log("❌ Proposal failed.");
+    }
+  }
+
+  async function getLatestPrice() {
+    const commands = [
+      { authorize: token },
+      { ticks: asset }
+    ];
+    const responses = await sendToBackend(commands);
+    const tick = responses.find(r => r.tick);
+    return tick?.tick?.quote || null;
+  }
+
+  async function process() {
+    const price = await getLatestPrice();
+    if (!price) {
+      log("⚠️ Failed to fetch price");
+      return;
+    }
+
+    log(`💲 Current price: ${price}`);
+    prices.push(price);
+    if (prices.length > 50) prices.shift();
+
+    if (entryPrices.length === 0) {
+      entryPrices.push(price);
+      await requestProposal();
+      return;
+    }
+
+    const avgEntry = entryPrices.reduce((a, b) => a + b, 0) / entryPrices.length;
+    const drop = ((avgEntry - price) / avgEntry) * 100;
+    const rise = ((price - avgEntry) / avgEntry) * 100;
+
+    if (entryPrices.length <= rebuyLevels.length && drop >= rebuyLevels[entryPrices.length - 1]) {
+      log(`📉 Price dropped ${drop.toFixed(2)}% — Rebuying`);
+      entryPrices.push(price);
+      await requestProposal();
+    }
+
+    if (rise >= 1.5) {
+      log(`🎯 Price rose ${rise.toFixed(2)}% — Taking Profit`);
+      entryPrices = [];
+    }
+  }
+
+  function startBot() {
+    token = document.getElementById("token").value.trim();
+    asset = document.getElementById("asset").value;
+    stake = parseFloat(document.getElementById("stake").value);
+    if (!token || !asset || isNaN(stake)) {
+      alert("⚠️ Please fill all fields correctly");
+      return;
+    }
+    document.getElementById("log").textContent = "🚀 Starting DanPaulsFX Bot...\n";
+    setInterval(process, 7000);
+  }
+</script>
+
+</body>
+</html>
