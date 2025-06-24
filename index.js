@@ -22,7 +22,7 @@ app.post("/ws-proxy", async (req, res) => {
     return res.status(400).json({ error: "Token and asset are required." });
   }
 
-  let ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
+  const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
 
   let isAuthorized = false;
   let priceFetched = false;
@@ -36,7 +36,8 @@ app.post("/ws-proxy", async (req, res) => {
 
     if (data.error) {
       ws.close();
-      return res.status(500).json({ error: data.error.message });
+      res.status(500).json({ error: data.error.message });
+      return;
     }
 
     if (data.msg_type === "authorize") {
@@ -53,14 +54,14 @@ app.post("/ws-proxy", async (req, res) => {
   };
 
   ws.onerror = () => {
-    return res.status(500).json({ error: "WebSocket connection error." });
+    res.status(500).json({ error: "WebSocket connection error." });
   };
 
-  // Handle timeout or unexpected disconnects
+  // Handle timeout
   setTimeout(() => {
     if (!priceFetched) {
       ws.close();
-      return res.status(500).json({ error: "Timeout fetching price." });
+      res.status(500).json({ error: "Timeout fetching price." });
     }
   }, 5000);
 });
