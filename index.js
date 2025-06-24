@@ -1,18 +1,24 @@
 const express = require("express");
 const cors = require("cors");
 const WebSocket = require("ws");
-const bodyParser = require("body-parser");
 
 const app = express();
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type'],
-}));
-app.use(bodyParser.json());
-
 const PORT = process.env.PORT || 10000;
 
+// Middleware
+app.use(cors({
+  origin: "*",
+  methods: ["POST"],
+  allowedHeaders: ["Content-Type"],
+}));
+app.use(express.json());
+
+// Test route
+app.get("/", (req, res) => {
+  res.send("🟢 DanPaulsFX server is running");
+});
+
+// Main proxy route
 app.post("/ws-proxy", async (req, res) => {
   const { token, asset } = req.body;
 
@@ -22,55 +28,50 @@ app.post("/ws-proxy", async (req, res) => {
 
   try {
     const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
+
     let price;
+    let authorized = false;
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ authorize: token }));
-      ws.send(JSON.stringify({ ticks: asset }));
     };
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      if (data.msg_type === "tick") {
+
+      if (data.error) {
+        ws.close();
+        return res.status(500).json({ error: data.error.message });
+      }
+
+      if (data.msg_type === "authorize") {
+        authorized = true;
+        ws.send(JSON.stringify({ ticks: asset }));
+      }
+
+      if (data.msg_type === "tick" && authorized) {
         price = data.tick.quote;
         ws.close();
       }
     };
 
-    ws.onclose = () => {
-      if (price) {
-        res.json({ result: { price } });
-      } else {
-        res.status(500).json({ error: "Failed to fetch price." });
-      }
+    ws.onerror = () => {
+      return res.status(500).json({ error: "WebSocket error." });
     };
 
-    ws.onerror = () => {
-      res.status(500).json({ error: "WebSocket error occurred." });
+    ws.onclose = () => {
+      if (price) {
+        return res.json({ result: { price } });
+      } else {
+        return res.status(500).json({ error: "Failed to fetch price." });
+      }
     };
   } catch (err) {
-    res.status(500).json({ error: "Internal server error." });
+    return res.status(500).json({ error: "Internal server error." });
   }
 });
 
-  ws.onerror = (err) => {
-    if (!hasResponded) {
-      hasResponded = true;
-      res.status(500).json({ error: "WebSocket error: " + err.message });
-    }
-  };
-
-  ws.onclose = () => {
-    if (!hasResponded) {
-      res.status(500).json({ error: "WebSocket closed before receiving data." });
-    }
-  };
-});
-
-app.get("/", (req, res) => {
-  res.send("🟢 DanPaulsFX server is running");
-});
-
+// Start server
 app.listen(PORT, () => {
   console.log(`🟢 DanPaulsFX server running on port ${PORT}`);
 });
