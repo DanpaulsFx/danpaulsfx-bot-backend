@@ -22,8 +22,7 @@ app.post("/ws-proxy", async (req, res) => {
   try {
     const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
 
-    let price = null;
-    let sentResponse = false;
+    let authorized = false;
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ authorize: token }));
@@ -32,23 +31,34 @@ app.post("/ws-proxy", async (req, res) => {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.error && !sentResponse) {
-        sentResponse = true;
+      if (data.error) {
         ws.close();
         return res.status(500).json({ error: data.error.message });
       }
 
       if (data.msg_type === "authorize") {
+        authorized = true;
         ws.send(JSON.stringify({ ticks: asset }));
       }
 
-      if (data.msg_type === "tick" && !sentResponse) {
-        price = parseFloat(data.tick.quote);
-        sentResponse = true;
+      if (data.msg_type === "tick" && authorized) {
         ws.close();
-        return res.json({ result: { tick: { quote: price } } });
+        return res.json({
+          result: [
+            { tick: { quote: data.tick.quote } }
+          ]
+        });
       }
     };
+
+    ws.onerror = () => {
+      return res.status(500).json({ error: "WebSocket error." });
+    };
+
+  } catch (err) {
+    return res.status(500).json({ error: "Internal server error." });
+  }
+});
 
     ws.onerror = () => {
       if (!sentResponse) {
