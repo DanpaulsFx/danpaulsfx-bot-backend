@@ -1,20 +1,17 @@
 const express = require("express");
 const cors = require("cors");
-const bodyParser = require("body-parser");
 const WebSocket = require("ws");
+const bodyParser = require("body-parser");
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-
 app.use(cors());
 app.use(bodyParser.json());
 
-app.post("/ws-proxy", (req, res) => {
-  const { token, asset } = req.body;
+const PORT = process.env.PORT || 10000;
 
-  if (!token || !asset) {
-    return res.status(400).json({ error: "Token and asset are required." });
-  }
+app.post("/ws-proxy", async (req, res) => {
+  const { token, asset } = req.body;
+  if (!token || !asset) return res.status(400).json({ error: "Token and asset required" });
 
   const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
 
@@ -22,12 +19,14 @@ app.post("/ws-proxy", (req, res) => {
     ws.send(JSON.stringify({ authorize: token }));
   };
 
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
+  let result = {};
+
+  ws.onmessage = (msg) => {
+    const data = JSON.parse(msg.data);
 
     if (data.error) {
       ws.close();
-      return res.status(400).json({ error: data.error.message });
+      return res.status(500).json({ error: data.error.message });
     }
 
     if (data.msg_type === "authorize") {
@@ -35,20 +34,26 @@ app.post("/ws-proxy", (req, res) => {
     }
 
     if (data.msg_type === "tick") {
-      const price = data.tick.quote;
+      result = { price: data.tick.quote };
       ws.close();
-      return res.json({ price });
     }
   };
 
   ws.onerror = (err) => {
-    console.error("WebSocket error:", err);
-    return res.status(500).json({ error: "WebSocket connection failed." });
+    res.status(500).json({ error: "WebSocket error: " + err.message });
+  };
+
+  ws.onclose = () => {
+    if (result.price) {
+      return res.json({ result });
+    } else {
+      return res.status(500).json({ error: "No tick data received" });
+    }
   };
 });
 
 app.get("/", (req, res) => {
-  res.send("🟢 DanPaulsFX server is up and running!");
+  res.send("🟢 DanPaulsFX server is running");
 });
 
 app.listen(PORT, () => {
