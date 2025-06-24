@@ -13,47 +13,45 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 10000;
 
-app.post("/ws-proxy", (req, res) => {
+app.post("/ws-proxy", async (req, res) => {
   const { token, asset } = req.body;
 
   if (!token || !asset) {
     return res.status(400).json({ error: "Token and asset are required." });
   }
 
-  const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
+  try {
+    const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
+    let price;
 
-  let isAuthorized = false;
-  let hasResponded = false;
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ authorize: token }));
-  };
-
-  ws.onmessage = (message) => {
-    const data = JSON.parse(message.data);
-
-    if (data.error) {
-      if (!hasResponded) {
-        hasResponded = true;
-        res.status(500).json({ error: data.error.message });
-        ws.close();
-      }
-      return;
-    }
-
-    if (data.msg_type === "authorize") {
-      isAuthorized = true;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ authorize: token }));
       ws.send(JSON.stringify({ ticks: asset }));
-    }
+    };
 
-    if (data.msg_type === "tick") {
-      if (!hasResponded) {
-        hasResponded = true;
-        res.json({ result: { price: data.tick.quote } });
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.msg_type === "tick") {
+        price = data.tick.quote;
         ws.close();
       }
-    }
-  };
+    };
+
+    ws.onclose = () => {
+      if (price) {
+        res.json({ result: { price } });
+      } else {
+        res.status(500).json({ error: "Failed to fetch price." });
+      }
+    };
+
+    ws.onerror = () => {
+      res.status(500).json({ error: "WebSocket error occurred." });
+    };
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
 
   ws.onerror = (err) => {
     if (!hasResponded) {
