@@ -5,20 +5,13 @@ const WebSocket = require("ws");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middleware
-app.use(cors({
-  origin: "*",
-  methods: ["POST"],
-  allowedHeaders: ["Content-Type"],
-}));
+app.use(cors());
 app.use(express.json());
 
-// Test route
 app.get("/", (req, res) => {
   res.send("🟢 DanPaulsFX server is running");
 });
 
-// Main proxy route
 app.post("/ws-proxy", async (req, res) => {
   const { token, asset } = req.body;
 
@@ -29,8 +22,8 @@ app.post("/ws-proxy", async (req, res) => {
   try {
     const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
 
-    let price;
-    let authorized = false;
+    let price = null;
+    let sentResponse = false;
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ authorize: token }));
@@ -39,30 +32,34 @@ app.post("/ws-proxy", async (req, res) => {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
 
-      if (data.error) {
+      if (data.error && !sentResponse) {
+        sentResponse = true;
         ws.close();
         return res.status(500).json({ error: data.error.message });
       }
 
       if (data.msg_type === "authorize") {
-        authorized = true;
         ws.send(JSON.stringify({ ticks: asset }));
       }
 
-      if (data.msg_type === "tick" && authorized) {
-        price = data.tick.quote;
+      if (data.msg_type === "tick" && !sentResponse) {
+        price = parseFloat(data.tick.quote);
+        sentResponse = true;
         ws.close();
+        return res.json({ result: { tick: { quote: price } } });
       }
     };
 
     ws.onerror = () => {
-      return res.status(500).json({ error: "WebSocket error." });
+      if (!sentResponse) {
+        sentResponse = true;
+        return res.status(500).json({ error: "WebSocket error." });
+      }
     };
 
     ws.onclose = () => {
-      if (price) {
-        return res.json({ result: { price } });
-      } else {
+      if (!sentResponse) {
+        sentResponse = true;
         return res.status(500).json({ error: "Failed to fetch price." });
       }
     };
@@ -71,7 +68,6 @@ app.post("/ws-proxy", async (req, res) => {
   }
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`🟢 DanPaulsFX server running on port ${PORT}`);
 });
