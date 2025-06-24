@@ -1,91 +1,63 @@
 const express = require("express");
-const WebSocket = require("ws");
-const bodyParser = require("body-parser");
 const cors = require("cors");
+const bodyParser = require("body-parser");
+const WebSocket = require("ws");
 
 const app = express();
+const PORT = process.env.PORT || 10000;
 
-app.use(cors({ origin: "*" }));
+// ✅ Enable CORS for Netlify or any frontend
+app.use(cors({
+  origin: "*", // Replace with your Netlify URL later for security
+  methods: ["POST", "GET", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(bodyParser.json());
 
-app.post("/ws-proxy", async (req, res) => {
-  const { commands } = req.body;
+// ✅ POST route that connects to Deriv WebSocket
+app.post("/ws-proxy", (req, res) => {
+  const { token, asset } = req.body;
 
-  if (!Array.isArray(commands) || commands.length === 0) {
-    return res.status(400).json({ error: "No commands provided" });
+  if (!token || !asset) {
+    return res.status(400).json({ error: "Token and asset are required." });
   }
 
-  try {
-    const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
-    const responses = [];
-    let isResolved = false;
+  const ws = new WebSocket("wss://ws.derivws.com/websockets/v3");
 
-    // Timeout failsafe (10s max wait)
-    const timeout = setTimeout(() => {
-      if (!isResolved) {
-        isResolved = true;
-        ws.close();
-        return res.status(504).json({ error: "WebSocket timeout" });
-      }
-    }, 10000);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ authorize: token }));
+  };
 
-    ws.on("open", () => {
-      console.log("🟢 WebSocket connection opened");
-      for (let cmd of commands) {
-        ws.send(JSON.stringify(cmd));
-      }
-    });
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
 
-    ws.on("message", (msg) => {
-      try {
-        const data = JSON.parse(msg);
-        responses.push(data);
+    if (data.error) {
+      ws.close();
+      return res.status(400).json({ error: data.error.message });
+    }
 
-        const gotTick = responses.some(r => r.tick);
-        const gotProposal = responses.some(r => r.proposal);
-        const gotBuy = responses.some(r => r.buy);
+    if (data.msg_type === "authorize") {
+      ws.send(JSON.stringify({ ticks: asset }));
+    }
 
-        if ((gotTick || gotProposal || gotBuy) && !isResolved) {
-          clearTimeout(timeout);
-          isResolved = true;
-          ws.close();
-          return res.json({ result: responses });
-        }
-      } catch (err) {
-        if (!isResolved) {
-          isResolved = true;
-          clearTimeout(timeout);
-          ws.close();
-          return res.status(500).json({ error: "Parse error", details: err.message });
-        }
-      }
-    });
+    if (data.msg_type === "tick") {
+      const price = data.tick.quote;
+      ws.close();
+      return res.json({ price });
+    }
+  };
 
-    ws.on("error", (err) => {
-      if (!isResolved) {
-        isResolved = true;
-        clearTimeout(timeout);
-        ws.close();
-        return res.status(500).json({ error: "WebSocket error", details: err.message });
-      }
-    });
-
-    ws.on("close", () => {
-      if (!isResolved) {
-        clearTimeout(timeout);
-        isResolved = true;
-        return res.json({ result: responses });
-      }
-    });
-
-  } catch (error) {
-    return res.status(500).json({ error: "Server error", details: error.message });
-  }
+  ws.onerror = () => {
+    return res.status(500).json({ error: "WebSocket connection error." });
+  };
 });
 
-app.get("/", (_, res) => {
-  res.send("✅ DanPaulsFX Proxy is running.");
+// ✅ Health check route
+app.get("/", (req, res) => {
+  res.send("🟢 DanPaulsFX server is up and running!");
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🟢 DanPaulsFX server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🟢 DanPaulsFX server running on port ${PORT}`);
+});
